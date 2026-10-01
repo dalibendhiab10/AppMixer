@@ -1,0 +1,6 @@
+.build/
+AppMixer.app/
+*.pkg
+.DS_Store
+.swiftpm/
+build/
