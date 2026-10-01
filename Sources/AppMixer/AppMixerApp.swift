@@ -35,7 +35,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(
-            rootView: MixerView(openPreferences: { [weak self] in self?.openPreferences() }).environmentObject(mixer))
+            rootView: MixerView(openPreferences: { [weak self] in self?.openPreferences() },
+                      openOnboarding: { [weak self] in self?.showOnboarding() }).environmentObject(mixer))
+
+        if !AudioPermission.isGranted || CommandLine.arguments.contains("--show-onboarding") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.showOnboarding() }
+        }
 
         // Developer flags used to capture README screenshots without clicking.
         let args = CommandLine.arguments
@@ -58,6 +63,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var preferencesWindow: NSWindow?
+    private var onboardingWindow: NSWindow?
+
+    private func showOnboarding() {
+        popover.performClose(nil)
+        if onboardingWindow == nil {
+            let window = NSWindow(contentViewController: NSHostingController(
+                rootView: OnboardingView(onDone: { [weak self] in self?.onboardingWindow?.close() }).environmentObject(mixer)))
+            window.title = "AppMixer"
+            window.styleMask = [.titled, .closable]
+            window.isReleasedWhenClosed = false
+            window.center()
+            onboardingWindow = window
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        onboardingWindow?.makeKeyAndOrderFront(nil)
+    }
 
     private func openPreferences() {
         popover.performClose(nil)

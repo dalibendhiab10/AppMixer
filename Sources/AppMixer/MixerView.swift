@@ -3,6 +3,7 @@ import SwiftUI
 struct MixerView: View {
     @EnvironmentObject var mixer: Mixer
     var openPreferences: () -> Void = {}
+    var openOnboarding: () -> Void = {}
     private let visibleApps = 5
 
     private var outputName: String {
@@ -11,6 +12,16 @@ struct MixerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if !mixer.permissionGranted {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+                    Text(mixer.t("permBanner")).font(.caption)
+                    Spacer()
+                    Button(mixer.t("fix"), action: openOnboarding).controlSize(.small)
+                }
+                .padding(8)
+                .background(.yellow.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+            }
             // General volume
             VStack(alignment: .leading, spacing: 2) {
                 Text(outputName).font(.headline).lineLimit(1)

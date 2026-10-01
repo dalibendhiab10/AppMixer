@@ -17,6 +17,7 @@ final class Mixer: ObservableObject {
     @Published private(set) var allApps: [AppEntry] = []
     @Published private(set) var hidden: Set<String>
     @Published private(set) var language: Language
+    @Published private(set) var permissionGranted = AudioPermission.isGranted
     /// Apps shown in the menu: playing first, then alphabetical.
     var apps: [AppEntry] { allApps.filter { !hidden.contains($0.id) } }
     @Published var master: Float = CA.masterVolume() ?? 1 {
@@ -138,7 +139,8 @@ final class Mixer: ObservableObject {
     /// At 100% no tap exists, so untouched apps play with zero added latency.
     private func apply(_ app: AppEntry) {
         let gain = effectiveGain(app)
-        guard gain < 0.999 else { removeTap(app.id); return }
+        // Without the permission a tap would silence the app instead of scaling it.
+        guard gain < 0.999, permissionGranted else { removeTap(app.id); return }
         guard let uid = CA.defaultOutputDevice.flatMap(CA.deviceUID) else { return }
 
         if let tap = taps[app.id], tap.processObjects == app.processObjects, tap.outputUID == uid {
@@ -156,6 +158,7 @@ final class Mixer: ObservableObject {
     }
 
     func refresh() {
+        permissionGranted = AudioPermission.isGranted
         outputs = CA.outputDevices()
         let previous = currentOutput
         currentOutput = CA.defaultOutputDevice ?? 0
