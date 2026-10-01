@@ -16,8 +16,6 @@ concurrency:
 jobs:
   release:
     runs-on: macos-latest
-    env:
-      HAS_SIGNING: ${{ secrets.APPLE_APP_CERT_P12 != '' && secrets.APPLE_INSTALLER_CERT_P12 != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,42 +50,8 @@ jobs:
             echo "**Installation:** download \`AppMixer-$NEXT.pkg\` below and open it."
           } > "$RUNNER_TEMP/notes.md"
 
-      - name: Import signing certificates
-        if: env.HAS_SIGNING == 'true'
-        env:
-          APP_CERT: ${{ secrets.APPLE_APP_CERT_P12 }}
-          INSTALLER_CERT: ${{ secrets.APPLE_INSTALLER_CERT_P12 }}
-          CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
-        run: |
-          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
-          KEYCHAIN_PASSWORD="$(uuidgen)"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          echo "$APP_CERT" | base64 --decode > "$RUNNER_TEMP/app.p12"
-          echo "$INSTALLER_CERT" | base64 --decode > "$RUNNER_TEMP/installer.p12"
-          security import "$RUNNER_TEMP/app.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
-          security import "$RUNNER_TEMP/installer.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/productsign -T /usr/bin/pkgbuild
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
-          APP_ID="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.*)"/\1/')"
-          INSTALLER_ID="$(security find-identity -v "$KEYCHAIN" | grep 'Developer ID Installer' | head -1 | sed -E 's/.*"(.*)"/\1/')"
-          echo "CODESIGN_IDENTITY=$APP_ID" >> "$GITHUB_ENV"
-          echo "INSTALLER_IDENTITY=$INSTALLER_ID" >> "$GITHUB_ENV"
-
       - name: Build package
         run: scripts/make-pkg.sh "${{ steps.version.outputs.version }}"
-
-      - name: Notarize
-        if: env.HAS_SIGNING == 'true'
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: |
-          PKG="build/AppMixer-${{ steps.version.outputs.version }}.pkg"
-          xcrun notarytool submit "$PKG" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
-          xcrun stapler staple "$PKG"
 
       - name: Tag and publish release
         env:
