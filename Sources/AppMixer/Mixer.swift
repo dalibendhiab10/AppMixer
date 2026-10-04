@@ -21,7 +21,7 @@ final class Mixer: ObservableObject {
     /// Apps shown in the menu: playing first, then alphabetical.
     var apps: [AppEntry] { allApps.filter { !hidden.contains($0.id) } }
     @Published var master: Float = CA.masterVolume() ?? 1 {
-        didSet { CA.setMasterVolume(master) }
+        didSet { if !syncingMaster { CA.setMasterVolume(master) } }
     }
     @Published private(set) var outputs: [CA.OutputDevice] = []
     @Published private(set) var currentOutput: AudioObjectID = 0
@@ -32,7 +32,9 @@ final class Mixer: ObservableObject {
     private var lastPlaying: [String: Date] = [:]
     private var known: [String: String]   // id -> name, so Preferences can list apps that are not running
     private var timer: Timer?
-    private var enforceTask: Task<Void, Never>?
+    private var syncingMaster = false
+    private var tapsPausedUntil = Date.distantPast
+    private var outputListener: AudioObjectPropertyListenerBlock?
     private let defaults = UserDefaults.standard
 
     init() {
@@ -42,9 +44,29 @@ final class Mixer: ObservableObject {
         language = Language(rawValue: defaults.string(forKey: "language") ?? "") ?? .en
         known = (defaults.dictionary(forKey: "known") as? [String: String]) ?? [:]
         refresh()
+        watchDefaultOutput()
         timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
+    }
+
+    /// A tap keeps audio flowing to the old output device. On Bluetooth devices that makes macOS route
+    /// back to it, so the moment the default output changes (from anywhere) every tap is torn down,
+    /// and taps are only rebuilt after the route has been stable for a moment.
+    private func watchDefaultOutput() {
+        var addr = CA.address(kAudioHardwarePropertyDefaultOutputDevice)
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    for id in Array(self.taps.keys) { self.removeTap(id) }
+                    self.tapsPausedUntil = Date().addingTimeInterval(1.5)
+                    self.refresh()
+                }
+            }
+        }
+        outputListener = block
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, DispatchQueue.main, block)
     }
 
     func volume(for app: AppEntry) -> Float { volumes[app.id] ?? 1 }
@@ -64,19 +86,6 @@ final class Mixer: ObservableObject {
     func selectOutput(_ device: CA.OutputDevice) {
         CA.setDefaultOutputDevice(device.id)
         refresh()
-        // Other apps (e.g. Discord in a call) can pull the route back right after a switch;
-        // re-assert the user's choice for a few seconds.
-        enforceTask?.cancel()
-        enforceTask = Task { [weak self] in
-            for _ in 0..<10 {
-                try? await Task.sleep(for: .milliseconds(500))
-                if Task.isCancelled { return }
-                if CA.defaultOutputDevice != device.id {
-                    CA.setDefaultOutputDevice(device.id)
-                    self?.refresh()
-                }
-            }
-        }
     }
 
     func applyPreferences(hidden newHidden: Set<String>, language newLanguage: Language) {
@@ -124,7 +133,11 @@ final class Mixer: ObservableObject {
         return result
     }
 
-    func syncMaster() { master = CA.masterVolume() ?? master }
+    func syncMaster() {
+        syncingMaster = true
+        master = CA.masterVolume() ?? master
+        syncingMaster = false
+    }
 
     // MARK: - Internals
 
@@ -141,6 +154,7 @@ final class Mixer: ObservableObject {
         let gain = effectiveGain(app)
         // Without the permission a tap would silence the app instead of scaling it.
         guard gain < 0.999, permissionGranted else { removeTap(app.id); return }
+        guard Date() >= tapsPausedUntil else { return }   // output just changed; wait for the route to settle
         guard let uid = CA.defaultOutputDevice.flatMap(CA.deviceUID) else { return }
 
         if let tap = taps[app.id], tap.processObjects == app.processObjects, tap.outputUID == uid {
